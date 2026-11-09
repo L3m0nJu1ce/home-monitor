@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Home Monitor</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#151922; --line:#262c38; --text:#e8ebf2; --muted:#8b93a5;
+    --accent:#7cc4a4; --warn:#f0b35a; --live:#ef5b5b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:24px 16px 40px}
+  h1{font-size:22px;margin:8px 0 4px;font-weight:650;letter-spacing:-.01em}
+  p{margin:6px 0;color:var(--muted)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0}
+  .card h2{font-size:15px;margin:0 0 6px;color:var(--text)}
+  button{font:inherit;border:0;border-radius:10px;padding:12px 16px;background:var(--accent);
+    color:#08130e;font-weight:600;cursor:pointer;width:100%}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button:disabled{opacity:.5}
+  input{font:inherit;width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);
+    background:#0e1118;color:var(--text);margin:6px 0 10px}
+  .link{word-break:break-all;font-family:ui-monospace,Menlo,monospace;font-size:13px;
+    background:#0e1118;border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text)}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+  .hidden{display:none!important}
+
+  /* Camera standby: near-black to save power */
+  #cam{position:fixed;inset:0;background:#000;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;text-align:center;padding:24px}
+  #cam .dot{width:10px;height:10px;border-radius:50%;background:#2a2f3a;margin-bottom:14px}
+  #cam.ready .dot{background:#2f6b52}
+  #cam.live .dot{background:var(--live);box-shadow:0 0 16px var(--live)}
+  #cam .msg{color:#4a5160;font-size:14px}
+  #cam.live .msg{color:#c96060}
+  #cam small{position:absolute;bottom:20px;color:#2c313b;font-size:12px}
+
+  /* Viewer */
+  #view{position:fixed;inset:0;background:#000;display:flex;flex-direction:column}
+  #vid{flex:1;width:100%;min-height:0;object-fit:contain;background:#000}
+  #vid.boost{filter:brightness(1.9) contrast(1.15)}
+  #bar{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:#0b0d12;
+    border-top:1px solid var(--line)}
+  #bar button{padding:11px 6px;font-size:14px}
+  #status{position:absolute;top:calc(12px + env(safe-area-inset-top));left:12px;right:12px;
+    text-align:center;font-size:14px;color:var(--text);text-shadow:0 1px 3px #000}
+  .pill{display:inline-block;background:rgba(0,0,0,.55);padding:6px 12px;border-radius:999px}
+</style>
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup" class="wrap hidden">
+  <h1>Home Monitor</h1>
+  <p>Turns this phone into an on-demand camera. The camera stays off until you open the viewer link.</p>
+
+  <div class="card">
+    <h2>1. On the old phone (the camera)</h2>
+    <p>Pick a PIN. You'll type it once on your own phone.</p>
+    <input id="pinNew" inputmode="numeric" maxlength="8" placeholder="PIN (4–8 digits)">
+    <button id="makeCam">Make this phone the camera</button>
+  </div>
+
+  <div class="card">
+    <h2>Already set up?</h2>
+    <p>If this phone is already the camera, it will go straight to standby next time you open this page.</p>
+  </div>
+</div>
+
+<!-- CAMERA LINK SHARE (shown once after setup) -->
+<div id="share" class="wrap hidden">
+  <h1>Camera ready</h1>
+  <p>Open this link on your own phone and bookmark it. It's private — anyone with it plus the PIN can watch.</p>
+  <div class="card">
+    <div class="link" id="viewLink"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="copyLink">Copy link</button>
+      <button id="shareLink" class="ghost">Share…</button>
+    </div>
+  </div>
+  <button id="goStandby">Go to standby</button>
+</div>
+
+<!-- CAMERA STANDBY -->
+<div id="cam" class="hidden">
+  <div class="dot"></div>
+  <div class="msg" id="camMsg">Starting…</div>
+  <small>Keep plugged in · tap to wake screen</small>
+</div>
+
+<!-- VIEWER -->
+<div id="pinGate" class="wrap hidden">
+  <h1>Home Monitor</h1>
+  <p>Enter the PIN you set on the camera phone.</p>
+  <input id="pinIn" inputmode="numeric" maxlength="8" placeholder="PIN">
+  <button id="pinGo">Connect</button>
+</div>
+
+<div id="view" class="hidden">
+  <video id="vid" playsinline autoplay></video>
+  <div id="status"><span class="pill" id="vStatus">Connecting…</span></div>
+  <div id="bar">
+    <button id="bSound" class="ghost">🔇 Sound</button>
+    <button id="bBoost" class="ghost">🌙 Night</button>
+    <button id="bFlip" class="ghost">🔄 Flip</button>
+    <button id="bEnd">End</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const show = id => ["setup","share","cam","pinGate","view"].forEach(x => $(x).classList.toggle("hidden", x !== id));
+  const store = {
+    get(k){ try { return localStorage.getItem(k); } catch { return null; } },
+    set(k,v){ try { localStorage.setItem(k,v); } catch {} }
+  };
+  const PREFIX = "homemon-v1-";
+  // ICE servers. STUN only works on friendly networks; add a TURN relay (metered.ca, Cloudflare, coturn)
+  // if watching over mobile data or the work network fails to connect.
+  const ICE_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    // { urls: "turn:YOUR_TURN_HOST:443?transport=tcp", username: "USER", credential: "PASS" },
+  ];
+  const peerOpts = { debug: 0, config: { iceServers: ICE_SERVERS } };
+  const params = new URLSearchParams(location.hash.slice(1));
+  const viewCode = params.get("watch");
+
+  async function sha(s){
+    const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+    return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,"0")).join("");
+  }
+  function randomCode(){
+    const a = new Uint8Array(12); crypto.getRandomValues(a);
+    return [...a].map(x => "abcdefghjkmnpqrstuvwxyz23456789"[x % 31]).join("");
+  }
+
+  /* ---------------- CAMERA ---------------- */
+  let camPeer, camStream = null, activeCall = null, activeConn = null, facing = "environment", wakeLock = null;
+
+  async function keepAwake(){
+    try { if ("wakeLock" in navigator) { wakeLock = await navigator.wakeLock.request("screen"); } } catch {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !$("cam").classList.contains("hidden")) keepAwake();
+  });
+
+  function camState(state, msg){
+    const c = $("cam"); c.classList.remove("ready","live"); if (state) c.classList.add(state);
+    $("camMsg").textContent = msg;
+  }
+
+  function stopCamera(){
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    if (activeCall) { try { activeCall.close(); } catch {} activeCall = null; }
+    if (activeConn) { try { activeConn.close(); } catch {} activeConn = null; }
+    camState("ready", "Standby — camera off");
+  }
+
+  async function openCamera(withAudio = true){
+    return navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 20 } },
+      audio: withAudio ? { echoCancellation: true, noiseSuppression: false, autoGainControl: true } : false
+    });
+  }
+
+  let restartTimer = null, badPins = 0, lockedUntil = 0;
+  function restartCameraPeer(delay, msg){
+    stopCamera(); camState("", msg);
+    if (restartTimer) return;
+    restartTimer = setTimeout(() => { restartTimer = null; try { camPeer.destroy(); } catch {} startCameraPeer(); }, delay);
+  }
+
+  function startCameraPeer(){
+    const code = store.get(PREFIX+"code"), pinHash = store.get(PREFIX+"pin");
+    show("cam"); keepAwake(); camState("", "Connecting…");
+    // handlers use the local `peer` so a stale peer's late events never touch its replacement
+    const peer = camPeer = new Peer(PREFIX + code, peerOpts);
+
+    peer.on("open", () => camState("ready", "Standby — camera off"));
+    peer.on("disconnected", () => {
+      if (peer.destroyed) return;
+      camState("", "Reconnecting…");
+      setTimeout(() => { try { if (!peer.destroyed && peer.disconnected) peer.reconnect(); } catch {} }, 3000);
+    });
+    peer.on("error", e => {
+      // after a network drop the broker can hold the old id for a while, so keep retrying
+      if (e.type === "unavailable-id") { restartCameraPeer(15000, "Camera ID busy — retrying…"); return; }
+      if (["network","server-error","socket-error","socket-closed"].includes(e.type)) restartCameraPeer(8000, "Offline — retrying…");
+    });
+
+    peer.on("connection", conn => {
+      conn.on("data", async msg => {
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type === "hello") {
+          if (Date.now() < lockedUntil) { conn.send({type:"locked"}); setTimeout(() => conn.close(), 300); return; }
+          if (msg.pin !== pinHash) {
+            if (++badPins >= 5) { badPins = 0; lockedUntil = Date.now() + 60000; }
+            conn.send({type:"denied"}); setTimeout(() => conn.close(), 300); return;
+          }
+          badPins = 0;
+          // one viewer at a time
+          if (activeConn && activeConn !== conn) { try { activeConn.send({type:"bumped"}); } catch {} stopCamera(); }
+          activeConn = conn;
+          let s;
+          try {
+            s = await openCamera();
+          } catch (err) {
+            conn.send({type:"camerr", detail: String(err && err.name || err)}); return;
+          }
+          // viewer left (or was bumped) while the camera was starting: don't leave it running
+          if (activeConn !== conn) { s.getTracks().forEach(t => t.stop()); return; }
+          camStream = s;
+          camState("live", "Someone is watching");
+          const call = activeCall = peer.call(conn.peer, camStream);
+          call.on("close", () => { if (call === activeCall) stopCamera(); });
+          conn.send({type:"ok"});
+        } else if (msg.type === "flip" && conn === activeConn && camStream) {
+          facing = facing === "environment" ? "user" : "environment";
+          try {
+            const ns = await openCamera(false);
+            const vt = ns.getVideoTracks()[0];
+            const sender = activeCall.peerConnection.getSenders().find(s => s.track && s.track.kind === "video");
+            if (sender) await sender.replaceTrack(vt);
+            camStream.getVideoTracks().forEach(t => t.stop());
+            camStream.removeTrack(camStream.getVideoTracks()[0]);
+            camStream.addTrack(vt);
+          } catch {}
+        } else if (msg.type === "bye" && conn === activeConn) {
+          stopCamera();
+        }
+      });
+      conn.on("close", () => { if (conn === activeConn) stopCamera(); });
+    });
+  }
+
+  /* ---------------- VIEWER ---------------- */
+  let viewPeer, viewConn, viewCall;
+
+  function vStatus(t, hideAfter){
+    $("vStatus").textContent = t; $("status").classList.remove("hidden");
+    if (hideAfter) setTimeout(() => $("status").classList.add("hidden"), hideAfter);
+  }
+
+  function startViewer(pinHash){
+    show("view"); vStatus("Connecting…");
+    viewPeer = new Peer(peerOpts);
+    viewPeer.on("open", () => {
+      viewConn = viewPeer.connect(PREFIX + viewCode, { reliable: true });
+      const timeout = setTimeout(() => vStatus("Camera phone not reachable — is it on standby and online?"), 15000);
+      viewConn.on("open", () => viewConn.send({ type:"hello", pin: pinHash }));
+      viewConn.on("data", msg => {
+        if (msg.type === "denied") { clearTimeout(timeout); store.set(PREFIX+"vpin-"+viewCode, ""); vStatus("Wrong PIN"); setTimeout(() => location.reload(), 1500); }
+        if (msg.type === "locked") { clearTimeout(timeout); vStatus("Too many wrong PINs — try again in a minute"); }
+        if (msg.type === "camerr") { clearTimeout(timeout); vStatus("Camera blocked on the old phone — open the page there and allow camera"); }
+        if (msg.type === "bumped") vStatus("Someone else started watching");
+        if (msg.type === "ok") clearTimeout(timeout);
+      });
+      viewConn.on("close", () => vStatus("Disconnected"));
+    });
+    viewPeer.on("call", call => {
+      viewCall = call;
+      call.answer();
+      call.on("stream", s => { const v = $("vid"); v.srcObject = s; v.muted = true; v.play().catch(()=>{}); vStatus("Live", 2500); });
+      call.on("close", () => vStatus("Camera stopped"));
+    });
+    viewPeer.on("error", e => {
+      if (e.type === "peer-unavailable") vStatus("Camera phone is offline");
+      else vStatus("Connection problem — tap End and reopen");
+    });
+  }
+
+  function endViewer(){
+    try { viewConn && viewConn.send({type:"bye"}); } catch {}
+    setTimeout(() => { try { viewCall && viewCall.close(); viewPeer && viewPeer.destroy(); } catch {}
+      $("vid").srcObject = null; vStatus("Ended — reopen link to watch again"); }, 200);
+  }
+  window.addEventListener("pagehide", () => { try { viewConn && viewConn.send({type:"bye"}); } catch {} });
+
+  $("bSound").onclick = () => { const v = $("vid"); v.muted = !v.muted; $("bSound").textContent = v.muted ? "🔇 Sound" : "🔊 Sound"; };
+  $("bBoost").onclick = () => $("vid").classList.toggle("boost");
+  $("bFlip").onclick = () => { try { viewConn.send({type:"flip"}); } catch {} };
+  $("bEnd").onclick = endViewer;
+
+  /* ---------------- ROUTING ---------------- */
+  function viewLink(){ return location.href.split("#")[0] + "#watch=" + store.get(PREFIX+"code"); }
+
+  if (viewCode) {
+    const saved = store.get(PREFIX+"vpin-"+viewCode);
+    if (saved) startViewer(saved);
+    else {
+      show("pinGate");
+      $("pinGo").onclick = async () => {
+        const p = $("pinIn").value.trim(); if (!p) return;
+        const h = await sha(viewCode + ":" + p);
+        store.set(PREFIX+"vpin-"+viewCode, h); startViewer(h);
+      };
+    }
+  } else if (store.get(PREFIX+"code")) {
+    startCameraPeer();
+  } else {
+    show("setup");
+    $("makeCam").onclick = async () => {
+      const p = $("pinNew").value.trim();
+      if (!/^\d{4,8}$/.test(p)) { $("pinNew").focus(); $("pinNew").placeholder = "Use 4–8 digits"; $("pinNew").value=""; return; }
+      // ask for camera once now so later wake-ups don't need a prompt
+      try { const s = await navigator.mediaDevices.getUserMedia({video:true,audio:true}); s.getTracks().forEach(t=>t.stop()); }
+      catch { alert("Please allow camera and microphone — the monitor needs them."); return; }
+      const code = randomCode();
+      store.set(PREFIX+"code", code);
+      store.set(PREFIX+"pin", await sha(code + ":" + p));
+      $("viewLink").textContent = viewLink(); show("share");
+    };
+  }
+  $("copyLink").onclick = async () => { try { await navigator.clipboard.writeText(viewLink()); $("copyLink").textContent = "Copied"; } catch {} };
+  $("shareLink").onclick = () => { if (navigator.share) navigator.share({ title:"Home Monitor", url: viewLink() }).catch(()=>{}); };
+  $("goStandby").onclick = startCameraPeer;
+})();
+</script>
+</body>
+</html>
