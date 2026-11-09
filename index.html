@@ -33,11 +33,10 @@
   #cam{position:fixed;inset:0;background:#000;display:flex;flex-direction:column;
     align-items:center;justify-content:center;text-align:center;padding:24px}
   #cam .dot{width:10px;height:10px;border-radius:50%;background:#2a2f3a;margin-bottom:14px}
-  #cam.ready .dot{background:#2f6b52}
-  #cam.live .dot{background:var(--live);box-shadow:0 0 16px var(--live)}
   #cam .msg{color:#4a5160;font-size:14px}
-  #cam.live .msg{color:#c96060}
   #cam small{position:absolute;bottom:20px;color:#2c313b;font-size:12px}
+  /* fully black while working normally; text only shows when something needs attention */
+  #cam.ready > *, #cam.live > *{display:none}
 
   /* Viewer */
   #view{position:fixed;inset:0;background:#000;display:flex;flex-direction:column}
@@ -159,7 +158,7 @@
     if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
     if (activeCall) { try { activeCall.close(); } catch {} activeCall = null; }
     if (activeConn) { try { activeConn.close(); } catch {} activeConn = null; }
-    camState("ready", "Standby — camera off");
+    camState("ready", "");
   }
 
   async function openCamera(withAudio = true){
@@ -182,7 +181,7 @@
     // handlers use the local `peer` so a stale peer's late events never touch its replacement
     const peer = camPeer = new Peer(PREFIX + code, peerOpts);
 
-    peer.on("open", () => camState("ready", "Standby — camera off"));
+    peer.on("open", () => camState("ready", ""));
     peer.on("disconnected", () => {
       if (peer.destroyed) return;
       camState("", "Reconnecting…");
@@ -216,7 +215,7 @@
           // viewer left (or was bumped) while the camera was starting: don't leave it running
           if (activeConn !== conn) { s.getTracks().forEach(t => t.stop()); return; }
           camStream = s;
-          camState("live", "Someone is watching");
+          camState("live", "");
           const call = activeCall = peer.call(conn.peer, camStream);
           call.on("close", () => { if (call === activeCall) stopCamera(); });
           conn.send({type:"ok"});
