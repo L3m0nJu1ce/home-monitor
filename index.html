@@ -32,6 +32,13 @@
   #status{position:absolute;top:calc(12px + env(safe-area-inset-top));left:12px;right:12px;
     text-align:center;font-size:14px;color:var(--text);text-shadow:0 1px 3px #000}
   .pill{display:inline-block;background:rgba(0,0,0,.55);padding:6px 12px;border-radius:999px}
+  textarea{font:13px/1.4 ui-monospace,Menlo,monospace;width:100%;min-height:96px;padding:12px;border-radius:10px;
+    border:1px solid var(--line);background:#0e1118;color:var(--text);margin:6px 0 10px;resize:vertical}
+  label{display:block;font-size:14px;color:var(--text);margin-top:8px}
+  .row{display:flex;gap:8px;margin-top:6px}.row>*{flex:1}
+  .note{font-size:13px}
+  .linkbtn{background:none;color:var(--accent);padding:8px 0;margin-top:14px;font-weight:500}
+  #relay{position:fixed;inset:0;background:var(--bg);overflow:auto;z-index:5}
 </style>
 </head>
 <body>
@@ -46,7 +53,27 @@
   <p>Enter the PIN you set in the app on the camera phone.</p>
   <input id="pinIn" inputmode="numeric" maxlength="8" placeholder="PIN">
   <button id="pinGo">Connect</button>
+  <button class="linkbtn" id="relayOpen1">Relay settings</button>
 </div>
+
+<!-- Relay (TURN) settings: saved only on this phone, never in the page code -->
+<div id="relay" class="hidden"><div class="wrap">
+  <h1>Relay settings</h1>
+  <p>Needed when watching from mobile data or a network that blocks direct connections. These details are saved on this phone only.</p>
+  <label for="rUrls">TURN server URLs (one per line)</label>
+  <textarea id="rUrls" spellcheck="false" autocapitalize="off" placeholder="turn:example.relay.metered.ca:80&#10;turns:example.relay.metered.ca:443?transport=tcp"></textarea>
+  <label for="rUser">Username</label>
+  <input id="rUser" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <label for="rCred">Credential</label>
+  <input id="rCred" type="password" autocomplete="off">
+  <p class="note">You can also paste the whole <code>iceServers</code> list from your provider into the URL box. It's read as-is.</p>
+  <p class="note" id="rMsg"></p>
+  <div class="row">
+    <button id="rSave">Save</button>
+    <button id="rClear" class="ghost">Remove relay</button>
+  </div>
+  <button class="linkbtn" id="rBack">Back</button>
+</div></div>
 
 <div id="view" class="hidden">
   <video id="vid" playsinline autoplay></video>
@@ -55,6 +82,7 @@
     <button id="bSound" class="ghost">🔇 Sound</button>
     <button id="bBoost" class="ghost">🌙 Night</button>
     <button id="bFlip" class="ghost">🔄 Flip</button>
+    <button id="bRelay" class="ghost">⚙ Relay</button>
     <button id="bEnd">End</button>
   </div>
 </div>
@@ -70,11 +98,13 @@
   // must match Prefs.PEER_PREFIX in the Android app
   const PREFIX = "homemon-v2-";
   const SIGNAL_URL = "wss://0.peerjs.com/peerjs";
-  // Add a TURN relay here (and in the app) if watching over mobile data or the work network fails.
-  const ICE_SERVERS = [
-    { urls: "stun:stun.l.google.com:19302" },
-    // { urls: "turn:YOUR_TURN_HOST:443?transport=tcp", username: "USER", credential: "PASS" },
-  ];
+  // A TURN relay is entered in "Relay settings" and kept in this phone's storage, so no secret is in the page.
+  // Only the viewer needs it: the camera app reaches the relay through the viewer's relay candidate.
+  const RELAY_KEY = PREFIX + "relay";
+  function relayServers(){
+    try { const r = JSON.parse(store.get(RELAY_KEY) || "null"); return Array.isArray(r) ? r : []; } catch { return []; }
+  }
+  function iceServers(){ return [{ urls: "stun:stun.l.google.com:19302" }, ...relayServers()]; }
   const viewCode = new URLSearchParams(location.hash.slice(1)).get("watch");
   const camId = PREFIX + viewCode;
 
@@ -131,7 +161,7 @@
   }
 
   async function call(pinHash){
-    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pc = new RTCPeerConnection({ iceServers: iceServers() });
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     dc = pc.createDataChannel("ctl");
@@ -149,7 +179,9 @@
       const s = pc.connectionState;
       if (s === "connected") { clearTimeout(timer); vStatus("Live", 2500); }
       else if (s === "disconnected") vStatus("Reconnecting…");
-      else if (s === "failed") vStatus("Couldn't reach the camera — this network may block it (needs a TURN relay)");
+      else if (s === "failed") vStatus(relayServers().length
+        ? "Couldn't reach the camera, even through the relay. Check the relay settings (⚙ Relay)."
+        : "Couldn't reach the camera. This network blocks direct connections, so add a relay with ⚙ Relay.");
     };
     await pc.setLocalDescription(await pc.createOffer());
     send("OFFER", { sdp: { type: "offer", sdp: pc.localDescription.sdp }, metadata: {}, proto: "homemon2", pin: pinHash });
@@ -183,6 +215,46 @@
   $("bBoost").onclick = () => $("vid").classList.toggle("boost");
   $("bFlip").onclick = () => { try { dc.send("flip"); } catch {} };
   $("bEnd").onclick = endViewer;
+
+  /* ---- relay settings ---- */
+  let relayReturn = "pinGate";
+  function openRelay(from){
+    relayReturn = from;
+    const r = relayServers(), first = r[0] || {};
+    const sameCreds = r.every(s => s.username === first.username && s.credential === first.credential);
+    $("rUrls").value = sameCreds ? r.flatMap(s => [].concat(s.urls)).join("\n") : JSON.stringify(r, null, 1);
+    $("rUser").value = sameCreds ? (first.username || "") : "";
+    $("rCred").value = sameCreds ? (first.credential || "") : "";
+    $("rMsg").textContent = r.length ? "A relay is saved on this phone." : "No relay saved.";
+    $("relay").classList.remove("hidden");
+  }
+  function closeRelay(){ $("relay").classList.add("hidden"); }
+  function parseRelay(){
+    const txt = $("rUrls").value.trim(), user = $("rUser").value.trim(), cred = $("rCred").value;
+    if (!txt) return [];
+    if (txt.startsWith("[") || txt.startsWith("{")) {
+      let v; try { v = JSON.parse(txt); } catch { throw new Error("That list isn't valid JSON. Paste it exactly as the provider shows it."); }
+      v = [].concat(v).filter(s => s && s.urls);
+      if (!v.length) throw new Error("No servers found in that list.");
+      return v.filter(s => [].concat(s.urls).some(u => /^turns?:/i.test(u)));
+    }
+    const urls = txt.split(/\s+/).filter(Boolean);
+    const bad = urls.find(u => !/^(turns?|stun):/i.test(u));
+    if (bad) throw new Error("Each URL must start with turn:, turns: or stun: (\"" + bad + "\" doesn't).");
+    if (urls.some(u => /^turns?:/i.test(u)) && (!user || !cred)) throw new Error("A TURN server needs a username and credential.");
+    return [{ urls, username: user, credential: cred }];
+  }
+  $("relayOpen1").onclick = () => openRelay("pinGate");
+  $("bRelay").onclick = () => openRelay("view");
+  $("rBack").onclick = closeRelay;
+  $("rClear").onclick = () => { store.set(RELAY_KEY, ""); $("rUrls").value = $("rUser").value = $("rCred").value = ""; $("rMsg").textContent = "Relay removed from this phone."; };
+  $("rSave").onclick = () => {
+    let r; try { r = parseRelay(); } catch (e) { $("rMsg").textContent = e.message; return; }
+    store.set(RELAY_KEY, JSON.stringify(r));
+    const reconnect = relayReturn === "view" && !ended;
+    $("rMsg").textContent = !r.length ? "Saved (no relay)." : reconnect ? "Saved. Reconnecting with the relay…" : "Saved.";
+    if (reconnect) setTimeout(() => location.reload(), 600); else setTimeout(closeRelay, 800);
+  };
 
   if (!viewCode) { show("intro"); return; }
   const saved = store.get(PREFIX+"vpin-"+viewCode);
