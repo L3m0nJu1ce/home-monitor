@@ -173,7 +173,7 @@
     };
     pc.ontrack = e => {
       const v = $("vid"), s = e.streams[0] || new MediaStream([e.track]);
-      if (v.srcObject !== s) { v.srcObject = s; v.muted = $("bSound").dataset.on !== "1"; v.play().catch(() => {}); }
+      if (v.srcObject !== s) { v.srcObject = s; v.muted = true; v.play().catch(() => {}); setSound(soundLevel); }
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
@@ -208,10 +208,32 @@
   }
   window.addEventListener("pagehide", bye);
 
-  $("bSound").onclick = () => {
-    const v = $("vid"); v.muted = !v.muted; $("bSound").dataset.on = v.muted ? "" : "1";
-    $("bSound").textContent = v.muted ? "🔇 Sound" : "🔊 Sound";
-  };
+  /* Sound plays through Web Audio so it can be boosted past the phone's normal maximum.
+     The video element stays muted; a compressor keeps loud noises from distorting at high gain. */
+  const SOUND_LEVELS = [
+    { gain: 0, label: "🔇 Sound" }, { gain: 1, label: "🔊 Sound" },
+    { gain: 3, label: "🔊 Loud" }, { gain: 6, label: "🔊 Max" },
+  ];
+  let soundLevel = 0, actx, gainNode, audioSrc, audioFor;
+  function setSound(level){
+    soundLevel = level;
+    $("bSound").textContent = SOUND_LEVELS[level].label;
+    const s = $("vid").srcObject;
+    if (!level && !actx) return;
+    if (!actx) {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      gainNode = actx.createGain();
+      const comp = actx.createDynamicsCompressor();
+      gainNode.connect(comp).connect(actx.destination);
+    }
+    if (s && s.getAudioTracks().length && audioFor !== s) {
+      if (audioSrc) audioSrc.disconnect();
+      audioSrc = actx.createMediaStreamSource(s); audioSrc.connect(gainNode); audioFor = s;
+    }
+    gainNode.gain.value = SOUND_LEVELS[level].gain;
+    actx.resume().catch(() => {});
+  }
+  $("bSound").onclick = () => setSound((soundLevel + 1) % SOUND_LEVELS.length);
   $("bBoost").onclick = () => $("vid").classList.toggle("boost");
   $("bFlip").onclick = () => { try { dc.send("flip"); } catch {} };
   $("bEnd").onclick = endViewer;
