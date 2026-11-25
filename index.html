@@ -32,6 +32,9 @@
   #status{position:absolute;top:calc(12px + env(safe-area-inset-top));left:12px;right:12px;
     text-align:center;font-size:14px;color:var(--text);text-shadow:0 1px 3px #000}
   .pill{display:inline-block;background:rgba(0,0,0,.55);padding:6px 12px;border-radius:999px}
+  #batt{position:absolute;top:calc(12px + env(safe-area-inset-top));right:12px;font-size:13px;
+    color:var(--text);text-shadow:0 1px 3px #000;z-index:1}
+  #batt.low{background:rgba(160,30,30,.8)}
   textarea{font:13px/1.4 ui-monospace,Menlo,monospace;width:100%;min-height:96px;padding:12px;border-radius:10px;
     border:1px solid var(--line);background:#0e1118;color:var(--text);margin:6px 0 10px;resize:vertical}
   label{display:block;font-size:14px;color:var(--text);margin-top:8px}
@@ -78,6 +81,7 @@
 <div id="view" class="hidden">
   <video id="vid" playsinline autoplay></video>
   <div id="status"><span class="pill" id="vStatus">Connecting…</span></div>
+  <span id="batt" class="pill hidden" title="Camera phone battery"></span>
   <div id="bar">
     <button id="bSound" class="ghost">🔇 Sound</button>
     <button id="bBoost" class="ghost">🌙 Night</button>
@@ -165,6 +169,15 @@
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     dc = pc.createDataChannel("ctl");
+    // the camera app reports its battery here when the channel opens and every minute after
+    dc.onmessage = e => {
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (typeof m.battery !== "number") return;
+      const b = $("batt");
+      b.textContent = (m.charging ? "⚡ " : "🔋 ") + m.battery + "%";
+      b.classList.toggle("low", !m.charging && m.battery <= 20);
+      b.classList.remove("hidden");
+    };
     pc.onicecandidate = e => {
       if (!e.candidate) return;
       const c = { candidate: { candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex } };
