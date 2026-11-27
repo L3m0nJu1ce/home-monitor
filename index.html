@@ -222,17 +222,12 @@
   window.addEventListener("pagehide", bye);
 
   /* Sound plays through Web Audio so it can be boosted past the phone's normal maximum.
-     The video element stays muted; a compressor keeps loud noises from distorting at high gain.
-     Boosting also boosts the mic's hiss, so the chain trims the hiss-heavy top end and low rumble,
-     and on Loud/Max a gate turns the volume down whenever the room is quiet (only hiss left):
-       source → high-pass → low-pass → gate → boost → compressor → speaker */
+     The video element stays muted; a compressor keeps loud noises from distorting at high gain. */
   const SOUND_LEVELS = [
     { gain: 0, label: "🔇 Sound" }, { gain: 1, label: "🔊 Sound" },
-    { gain: 3, label: "🔊 Loud", gate: true }, { gain: 6, label: "🔊 Max", gate: true },
+    { gain: 3, label: "🔊 Loud" }, { gain: 6, label: "🔊 Max" },
   ];
-  const GATE_FLOOR = 0.15, GATE_OPEN = 2.5;  // quiet volume; how far above the hiss a sound must be
-  let soundLevel = 0, actx, gainNode, gateNode, analyser, filterIn, audioSrc, audioFor, gateTimer;
-  let noiseFloor = 0, quietSince = 0;
+  let soundLevel = 0, actx, gainNode, audioSrc, audioFor;
   function setSound(level){
     soundLevel = level;
     $("bSound").textContent = SOUND_LEVELS[level].label;
@@ -240,37 +235,16 @@
     if (!level && !actx) return;
     if (!actx) {
       actx = new (window.AudioContext || window.webkitAudioContext)();
-      filterIn = actx.createBiquadFilter(); filterIn.type = "highpass"; filterIn.frequency.value = 90;
-      const lowpass = actx.createBiquadFilter(); lowpass.type = "lowpass"; lowpass.frequency.value = 7000;
-      gateNode = actx.createGain();
       gainNode = actx.createGain();
       const comp = actx.createDynamicsCompressor();
-      analyser = actx.createAnalyser(); analyser.fftSize = 1024;
-      filterIn.connect(lowpass).connect(gateNode).connect(gainNode).connect(comp).connect(actx.destination);
-      lowpass.connect(analyser);
+      gainNode.connect(comp).connect(actx.destination);
     }
     if (s && s.getAudioTracks().length && audioFor !== s) {
       if (audioSrc) audioSrc.disconnect();
-      audioSrc = actx.createMediaStreamSource(s); audioSrc.connect(filterIn); audioFor = s;
+      audioSrc = actx.createMediaStreamSource(s); audioSrc.connect(gainNode); audioFor = s;
     }
     gainNode.gain.value = SOUND_LEVELS[level].gain;
-    clearInterval(gateTimer);
-    gateNode.gain.value = 1;
-    if (SOUND_LEVELS[level].gate) gateTimer = setInterval(runGate, 50);
     actx.resume().catch(() => {});
-  }
-  // Tracks the steady hiss level and opens the gate quickly for anything clearly louder (bark, voice,
-  // door), closing it gently after half a second of quiet so sounds aren't chopped off.
-  const gateBuf = new Float32Array(1024);
-  function runGate(){
-    analyser.getFloatTimeDomainData(gateBuf);
-    let sum = 0; for (const x of gateBuf) sum += x * x;
-    const rms = Math.sqrt(sum / gateBuf.length);
-    if (rms < 1e-4) return;  // no audio flowing yet
-    noiseFloor = !noiseFloor || rms < noiseFloor ? rms : noiseFloor * 1.01;  // falls at once, rises over seconds
-    const now = actx.currentTime;
-    if (rms > noiseFloor * GATE_OPEN) { quietSince = now; gateNode.gain.setTargetAtTime(1, now, 0.01); }
-    else if (now - quietSince > 0.5) gateNode.gain.setTargetAtTime(GATE_FLOOR, now, 0.2);
   }
   $("bSound").onclick = () => setSound((soundLevel + 1) % SOUND_LEVELS.length);
   $("bBoost").onclick = () => $("vid").classList.toggle("boost");
